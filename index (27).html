@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Asistencia acústica</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:12px;max-width:520px;margin:auto;background:#111;color:#eee}
+label,select,input,button,textarea{font-size:16px;margin:4px 0;width:100%;box-sizing:border-box}
+button{padding:12px;border:0;border-radius:8px;background:#3b82f6;color:#fff}
+canvas{width:100%;height:90px;background:#000;border-radius:6px}
+#grid{display:grid;grid-template-columns:repeat(16,1fr);gap:2px}
+#grid div{aspect-ratio:1;background:#333;border-radius:2px;font-size:8px;text-align:center}
+#grid div.on{background:#22c55e;color:#000}
+.hide{display:none}
+</style></head><body>
+<h3>Asistencia acústica</h3>
+<label>Rol <select id="role"><option value="participant">Participante</option><option value="host">Anfitrión</option></select></label>
+<label>Banda <select id="band"><option value="ultra">Ultrasónico (17.2 kHz)</option><option value="casi">Casi inaudible (15 kHz)</option><option value="audible">Debug audible (3 kHz)</option></select></label>
+<label>Clave de clase (igual en todos) <input id="key" value="clase1"></label>
+<label id="idbox">Mi ID (1-64) <input id="id" type="number" min="1" max="64" value="1"></label>
+<label>Umbral sobre ruido: <b id="mv">12</b> dB <input id="margin" type="range" min="3" max="30" value="12"></label>
+<button id="go">Activar micrófono y escuchar</button>
+<button id="new" class="hide">Iniciar toma de asistencia</button>
+<canvas id="cv" width="440" height="90"></canvas>
+<p id="status">Inactivo</p>
+<div id="grid"></div>
+<div id="hostbox" class="hide">
+<label>Lista (un nombre por línea; la línea N = ID N)<textarea id="names" rows="6"></textarea></label>
+<div id="list"></div></div>
+<script type="module">
+import { AudioEngine, BANDS, NCH } from './audio-engine.js';
+import { Protocol } from './protocol.js';
+const $ = id => document.getElementById(id);
+const eng = new AudioEngine();
+const grid = $('grid');
+for (let i = 0; i < 64; i++) { const d = document.createElement('div'); d.textContent = i + 1; grid.append(d); }
+$('names').value = localStorage.names || '';
+$('names').oninput = () => { localStorage.names = $('names').value; draw(); };
+let lastOn = [];
+const proto = new Protocol(eng, on => { if (on) lastOn = on; else draw(); });
+function draw() {
+  const ids = proto.presentIds();
+  [...grid.children].forEach((d, i) => d.classList.toggle('on', ids.includes(i + 1)));
+  $('status').textContent = `${proto.role} · nonce ${proto.nonce ?? '-'} · presentes: ${ids.length} · ${proto.mode}`;
+  const names = $('names').value.split('\n');
+  $('list').innerHTML = names.map((n, i) => n.trim() ? `<div style="color:${ids.includes(i+1)?'#22c55e':'#888'}">${i+1}. ${n} ${ids.includes(i+1)?'✔':''}</div>` : '').join('');
+}
+const cv = $('cv'), g = cv.getContext('2d');
+(function loop() {
+  g.clearRect(0, 0, 440, 90);
+  const w = 440 / NCH;
+  lastOn.forEach((o, i) => { g.fillStyle = o ? '#22c55e' : '#333'; g.fillRect(i * w + 1, o ? 10 : 70, w - 2, o ? 80 : 20); });
+  requestAnimationFrame(loop);
+})();
+$('role').onchange = () => {
+  const h = $('role').value === 'host';
+  proto.role = $('role').value; $('idbox').classList.toggle('hide', h);
+  $('hostbox').classList.toggle('hide', !h); $('new').classList.toggle('hide', !h);
+};
+$('band').onchange = () => eng.base = BANDS[$('band').value];
+$('margin').oninput = e => { eng.marginDb = +e.target.value; $('mv').textContent = e.target.value; };
+$('id').oninput = e => proto.id = +e.target.value;
+$('key').oninput = e => proto.key = e.target.value;
+$('go').onclick = async () => {
+  proto.key = $('key').value; proto.id = +$('id').value; proto.role = $('role').value;
+  eng.base = BANDS[$('band').value];
+  await eng.init(); proto.start(); $('go').textContent = 'Escuchando…'; $('go').disabled = true;
+};
+$('new').onclick = () => proto.role === 'host' && (proto.id = 0, proto.newSession());
+setInterval(draw, 500);
+</script></body></html>
