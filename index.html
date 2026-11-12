@@ -3,68 +3,128 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Asistencia acústica</title>
 <style>
-body{font-family:system-ui,sans-serif;margin:0;padding:12px;max-width:520px;margin:auto;background:#111;color:#eee}
+body{font-family:system-ui,sans-serif;margin:auto;padding:12px;max-width:520px;background:#111;color:#eee}
 label,select,input,button,textarea{font-size:16px;margin:4px 0;width:100%;box-sizing:border-box}
+input[type=checkbox]{width:auto}
 button{padding:12px;border:0;border-radius:8px;background:#3b82f6;color:#fff}
+button.s{padding:6px;font-size:14px;background:#444;width:auto;margin-right:4px}
 canvas{width:100%;height:90px;background:#000;border-radius:6px}
 #grid{display:grid;grid-template-columns:repeat(16,1fr);gap:2px}
 #grid div{aspect-ratio:1;background:#333;border-radius:2px;font-size:8px;text-align:center}
 #grid div.on{background:#22c55e;color:#000}
-.hide{display:none}
+#card{font-size:22px;text-align:center;padding:24px;border-radius:12px;background:#222;margin:8px 0}
+.hide{display:none} .row{padding:6px 0;border-bottom:1px solid #333;font-size:14px}
+details{margin:8px 0} summary{cursor:pointer}
 </style></head><body>
 <h3>Asistencia acústica</h3>
 <label>Rol <select id="role"><option value="participant">Participante</option><option value="host">Anfitrión</option></select></label>
 <label>Banda <select id="band"><option value="ultra">Ultrasónico (17.2 kHz)</option><option value="casi">Casi inaudible (15 kHz)</option><option value="audible">Debug audible (3 kHz)</option></select></label>
-<label>Clave de clase (igual en todos) <input id="key" value="clase1"></label>
-<label id="idbox">Mi ID (1-64) <input id="id" type="number" min="1" max="64" value="1"></label>
+<label>Clave de clase (igual en todos) <input id="key"></label>
+<label id="idbox">Mi ID (1-64) <input id="id" type="number" min="1" max="64"></label>
 <label>Umbral sobre ruido: <b id="mv">12</b> dB <input id="margin" type="range" min="3" max="30" value="12"></label>
 <button id="go">Activar micrófono y escuchar</button>
-<button id="new" class="hide">Iniciar toma de asistencia</button>
+
+<div id="pbox"><div id="card">⏳ Esperando onda...</div><div id="me"></div></div>
+
+<div id="hbox" class="hide">
+  <button id="new">Iniciar toma de asistencia</button>
+  <button id="re">🔊 Re-emitir onda actual</button>
+  <label><input type="checkbox" id="auto"> Auto re-emitir cada 5s</label>
+  <p id="status"></p>
+  <details open><summary>Historial de sesiones</summary><div id="hist"></div></details>
+  <details><summary>Padrón y Google Sheets</summary>
+    <label>URL del Apps Script (/exec) <input id="url" placeholder="https://script.google.com/macros/s/.../exec"></label>
+    <button id="pull">⬇️ Descargar padrón desde la hoja</button>
+    <label>Pegar padrón (Nombre,Codigo por línea; ID = nº de línea)<textarea id="rt" rows="5"></textarea></label>
+    <button id="imp">Importar texto</button>
+    <button id="test" style="margin-top:4px">Cargar 20 alumnos de prueba</button>
+    <p id="msg"></p>
+  </details>
+  <div id="list"></div>
+</div>
 <canvas id="cv" width="440" height="90"></canvas>
-<p id="status">Inactivo</p>
 <div id="grid"></div>
-<div id="hostbox" class="hide">
-<label>Lista (un nombre por línea; la línea N = ID N)<textarea id="names" rows="6"></textarea></label>
-<div id="list"></div></div>
+
 <script type="module">
 import { AudioEngine, BANDS, NCH } from './audio-engine.js';
 import { Protocol } from './protocol.js';
+import * as DB from './db.js';
 const $ = id => document.getElementById(id);
-const eng = new AudioEngine();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+
+// ---- ajustes persistentes ----
+const S = Object.assign({ role: 'participant', id: 1, band: 'ultra', key: 'clase1', url: '', auto: false }, JSON.parse(localStorage.cfg || '{}'));
+const persist = () => localStorage.cfg = JSON.stringify(S);
+for (const k of ['role', 'id', 'band', 'key', 'url']) {
+  $(k).value = S[k];
+  $(k).addEventListener('input', () => { S[k] = k === 'id' ? +$(k).value : $(k).value; persist(); apply(); });
+}
+$('auto').checked = S.auto;
+$('auto').onchange = () => { S.auto = $('auto').checked; persist(); };
+
+const eng = new AudioEngine(); let lastOn = [], roster = [], cur = null, lastKey = '';
+const proto = new Protocol(eng, on => { if (on) lastOn = on; else { draw(); autosave(); } });
+function apply() {
+  const h = S.role === 'host';
+  proto.role = S.role; proto.id = h ? 0 : S.id; proto.key = S.key; eng.base = BANDS[S.band];
+  $('idbox').classList.toggle('hide', h); $('pbox').classList.toggle('hide', h); $('hbox').classList.toggle('hide', !h);
+}
+$('margin').oninput = e => { eng.marginDb = +e.target.value; $('mv').textContent = e.target.value; };
 const grid = $('grid');
 for (let i = 0; i < 64; i++) { const d = document.createElement('div'); d.textContent = i + 1; grid.append(d); }
-$('names').value = localStorage.names || '';
-$('names').oninput = () => { localStorage.names = $('names').value; draw(); };
-let lastOn = [];
-const proto = new Protocol(eng, on => { if (on) lastOn = on; else draw(); });
+const nameOf = id => (roster.find(p => p.id === id) || {}).nombre || '';
+
 function draw() {
   const ids = proto.presentIds();
   [...grid.children].forEach((d, i) => d.classList.toggle('on', ids.includes(i + 1)));
-  $('status').textContent = `${proto.role} · nonce ${proto.nonce ?? '-'} · presentes: ${ids.length} · ${proto.mode}`;
-  const names = $('names').value.split('\n');
-  $('list').innerHTML = names.map((n, i) => n.trim() ? `<div style="color:${ids.includes(i+1)?'#22c55e':'#888'}">${i+1}. ${n} ${ids.includes(i+1)?'✔':''}</div>` : '').join('');
+  $('status').textContent = `nonce ${proto.nonce ?? '-'} · presentes: ${ids.length}/${roster.length || '?'} · ${proto.mode}`;
+  $('list').innerHTML = roster.map(p => `<div style="color:${ids.includes(p.id) ? '#22c55e' : '#888'}">${p.id}. ${p.nombre} ${ids.includes(p.id) ? '✔' : ''}</div>`).join('');
+  if (S.role === 'participant') {
+    $('me').textContent = nameOf(S.id) ? `👤 ${nameOf(S.id)} (ID ${S.id})` : `ID ${S.id}`;
+    $('card').textContent = proto.nonce === null ? '⏳ Esperando onda...'
+      : proto.isMyIdConfirmed() && proto.sentOwn && proto.mode !== 'emit' ? '✅ ¡Asistencia confirmada en la onda!'
+      : '📡 Propagando onda...';
+  }
 }
+function autosave() {
+  if (S.role !== 'host' || !cur || proto.nonce !== cur.nonce) return;
+  const ids = proto.presentIds(), k = ids.join(',');
+  if (k === lastKey) return;
+  lastKey = k; cur.presentIds = ids; cur.sincronizado = false;
+  DB.saveSession(cur).then(renderHist);
+}
+async function renderHist() {
+  const all = await DB.listSessions();
+  $('hist').innerHTML = all.map(s => `<div class="row">${new Date(s.fecha).toLocaleString()} · ${s.presentIds.length}/${s.totalRoster} ${s.sincronizado ? '☁️' : ''}<br>
+   <button class="s" data-a="csv" data-id="${s.id}">📥 Descargar CSV</button><button class="s" data-a="sync" data-id="${s.id}">📊 Enviar a Google Sheets</button></div>`).join('') || 'Sin sesiones';
+}
+const msg = t => $('msg').textContent = t;
+$('hist').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.a === 'csv') return DB.exportSessionCSV(b.dataset.id);
+  if (!S.url) return alert('Pegá primero la URL del Apps Script');
+  try { const n = await DB.syncToGoogleSheets(b.dataset.id, S.url); alert(`Enviado: ${n} filas`); renderHist(); }
+  catch (err) { alert('Sin conexión o error: ' + err.message); }
+};
+$('pull').onclick = async () => { try { msg(`Padrón: ${await DB.fetchRosterFromScript(S.url)} alumnos`); roster = await DB.getRoster(); draw(); } catch (e) { msg('Error: ' + e.message); } };
+$('imp').onclick = async () => { msg(`Importados ${await DB.importRosterText($('rt').value)}`); roster = await DB.getRoster(); draw(); };
+$('test').onclick = async () => { await DB.loadTestRoster(); msg('20 alumnos de prueba cargados'); roster = await DB.getRoster(); draw(); };
+$('go').onclick = async () => { apply(); await eng.init(); proto.start(); $('go').textContent = 'Escuchando…'; $('go').disabled = true; };
+$('new').onclick = async () => {
+  if (S.role !== 'host') return;
+  apply(); proto.newSession(); lastKey = '';
+  cur = { id: new Date().toISOString(), fecha: new Date().toISOString(), clave: S.key, nonce: proto.nonce, presentIds: [], totalRoster: roster.length, sincronizado: false };
+  await DB.saveSession(cur); renderHist();
+};
+$('re').onclick = () => proto.rebroadcast();
+setInterval(() => { if (S.auto && S.role === 'host') proto.rebroadcast(); }, 5000);
+
 const cv = $('cv'), g = cv.getContext('2d');
 (function loop() {
-  g.clearRect(0, 0, 440, 90);
-  const w = 440 / NCH;
+  g.clearRect(0, 0, 440, 90); const w = 440 / NCH;
   lastOn.forEach((o, i) => { g.fillStyle = o ? '#22c55e' : '#333'; g.fillRect(i * w + 1, o ? 10 : 70, w - 2, o ? 80 : 20); });
   requestAnimationFrame(loop);
 })();
-$('role').onchange = () => {
-  const h = $('role').value === 'host';
-  proto.role = $('role').value; $('idbox').classList.toggle('hide', h);
-  $('hostbox').classList.toggle('hide', !h); $('new').classList.toggle('hide', !h);
-};
-$('band').onchange = () => eng.base = BANDS[$('band').value];
-$('margin').oninput = e => { eng.marginDb = +e.target.value; $('mv').textContent = e.target.value; };
-$('id').oninput = e => proto.id = +e.target.value;
-$('key').oninput = e => proto.key = e.target.value;
-$('go').onclick = async () => {
-  proto.key = $('key').value; proto.id = +$('id').value; proto.role = $('role').value;
-  eng.base = BANDS[$('band').value];
-  await eng.init(); proto.start(); $('go').textContent = 'Escuchando…'; $('go').disabled = true;
-};
-$('new').onclick = () => proto.role === 'host' && (proto.id = 0, proto.newSession());
 setInterval(draw, 500);
+apply(); DB.getRoster().then(r => { roster = r; draw(); }); renderHist();
 </script></body></html>

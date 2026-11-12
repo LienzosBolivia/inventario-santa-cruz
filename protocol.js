@@ -38,6 +38,8 @@ export class Protocol {
     for (let p = 0; p < 64; p++) if (this.state[p >> 4] >> (p & 15) & 1) r.push(posToId(p, rot));
     return r.sort((a, b) => a - b);
   }
+  rebroadcast() { if (this.nonce !== null && this.mode === 'idle') this.emit(0); }
+  isMyIdConfirmed() { return this.nonce !== null && this.presentIds().includes(this.id); }
   async emit(jitter = 100 + Math.random() * 400) {
     this.mode = 'emit';
     await new Promise(r => setTimeout(r, jitter));
