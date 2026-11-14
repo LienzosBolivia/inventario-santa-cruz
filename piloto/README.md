@@ -1,0 +1,10 @@
+# Onda · piloto acústico 1
+Comunicación directa offline por turnos entre un anfitrión y participantes. Sin relay ni Google Sheets en esta fase. Perfil local, IDs 1–64 asignados manualmente, sin autenticación. No constituye un registro de identidad ni un sistema de asistencia listo para producción.
+
+Abrir por HTTPS en cada celular con internet y esperar la verificación de caché. Un anfitrión, participantes con IDs únicos, misma banda. Activar audio en todos, volumen multimedia moderado-alto, sin auriculares, pantallas abiertas. Comenzar a 1 metro con un ID; comprobar respuesta en anfitrión y acuse en participante. Luego repetir sin conexión y con más IDs. Guardar CSV y diagnóstico. Navegadores integrados pueden no admitir micrófono; usar Chrome/Safari. El acceso al sitio privado puede requerir iniciar sesión antes de desconectarse.
+
+Protocolo: 8-FSK, 150 Hz entre portadoras, base 17.2 kHz (alternativas 15 y 3 kHz), símbolo de 100 ms, FFT 2048 sin suavizado. Preámbulo de 10 símbolos y carga de 27 símbolos (10 bytes). Tipo/versión, sesión aleatoria de 32 bits, ID, turno de 16 bits y CRC16-CCITT. POLL → REPLY → ACK. Dos intentos, guarda de 400 ms, temporización por símbolos. CRC detecta errores accidentales, no autentica paquetes. Requiere medición física: el software no garantiza compatibilidad acústica, alcance ni tasa de error.
+
+El anfitrión registra solo REPLY para sesión/ID/turno pendientes. El participante confirma solo ACK correspondiente a su respuesta reciente. No se mezclan listas ni se propagan bits de presencia. El anfitrión conserva sesiones (máximo 30) y exporta CSV/JSON. Al ocultar pantalla se interrumpe la toma; no se promete ejecución en segundo plano. IDs recibidos no equivalen a personas verificadas. Los nombres de perfil no viajan por el audio.
+
+Pruebas: `node --test tests/*.test.mjs` desde la raíz del repositorio. GitHub Pages publica la carpeta `piloto/` dentro del repositorio. Todos los archivos son locales al repositorio; no depende del sitio externo.
